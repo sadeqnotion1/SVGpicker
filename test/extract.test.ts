@@ -6,8 +6,11 @@ import {
   extractFromFile,
   shouldScan,
   isSvgFile,
+  type ExtractedIcon,
 } from "../src/lib/extract"
 import { parseRepoInput } from "../src/lib/github"
+import { buildSinglePrompt, buildBatchPrompt, type IconChange } from "../src/lib/prompt"
+import type { IconMatch } from "../src/lib/iconify"
 
 let passed = 0
 function test(name: string, fn: () => void) {
@@ -56,6 +59,38 @@ test("extractFromFile reads a standalone svg file", () => {
   assert.equal(icons[0].source, "file")
   assert.equal(icons[0].query, "settings gear")
   assert.ok(!icons[0].svg.includes("<?xml"))
+})
+
+function fakeChange(path: string, name: string, icon: string): IconChange {
+  const source: ExtractedIcon = {
+    id: path, name, rawName: name, query: name, path, svg: "<svg><path d='M1 1'/></svg>", source: "file",
+  }
+  const replacement: IconMatch = {
+    icon, prefix: icon.split(":")[0], name: icon.split(":")[1], library: "Tabler",
+    svgUrl: "https://api.iconify.design/" + icon.replace(":", "/") + ".svg", previewUrl: "x",
+  }
+  return { id: path, source, replacement, replacementSvg: "<svg><path d='M2 2'/></svg>" }
+}
+
+test("buildSinglePrompt includes path + old/new svg", () => {
+  const p = buildSinglePrompt(fakeChange("icons/home.svg", "home", "tabler:home"))
+  assert.ok(p.includes("File: icons/home.svg"))
+  assert.ok(p.includes("tabler:home"))
+  assert.ok(p.includes("OLD SVG"))
+  assert.ok(p.includes("NEW SVG"))
+})
+
+test("buildBatchPrompt enumerates every change", () => {
+  const p = buildBatchPrompt([
+    fakeChange("a/home.svg", "home", "tabler:home"),
+    fakeChange("b/user.svg", "user", "lucide:user"),
+  ])
+  assert.ok(p.includes("ALL 2 changes"))
+  assert.ok(p.includes("=== Change 1 ==="))
+  assert.ok(p.includes("=== Change 2 ==="))
+  assert.ok(p.includes("a/home.svg"))
+  assert.ok(p.includes("b/user.svg"))
+  assert.equal(buildBatchPrompt([]), "")
 })
 
 console.log(`\nAll ${passed} test groups passed.`)

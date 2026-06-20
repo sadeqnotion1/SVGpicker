@@ -2,9 +2,14 @@
   import { createEventDispatcher } from "svelte"
   import { searchSimilar, fetchIconSvg, type IconMatch } from "../lib/iconify"
   import type { ExtractedIcon } from "../lib/extract"
+  import { buildSinglePrompt } from "../lib/prompt"
 
   export let icon: ExtractedIcon
-  const dispatch = createEventDispatcher<{ close: void }>()
+  export let queuedIcon: string | null = null
+  const dispatch = createEventDispatcher<{
+    close: void
+    add: { replacement: IconMatch; svg: string }
+  }>()
 
   let query = ""
   let loading = false
@@ -58,32 +63,10 @@
     }
   }
 
-  // A ready-to-paste instruction for an AI coding terminal (Cursor, Claude Code, etc.).
-  $: prompt = chosen ? buildPrompt(icon, chosen, chosenSvg) : ""
-  function buildPrompt(src: ExtractedIcon, repl: IconMatch, svg: string): string {
-    const file = src.path.split("#")[0]
-    const kind =
-      src.source === "file"
-        ? "This is a standalone .svg file — replace its entire contents with the NEW SVG."
-        : "This icon is an inline <svg> inside the file — find the OLD SVG below and replace just that element."
-    const newSvg = svg || "(fetch from " + repl.svgUrl + ")"
-    return [
-      "Replace an icon in my project.",
-      "",
-      "File: " + file,
-      "Old icon: \"" + src.name + "\"",
-      "New icon: " + repl.icon + "  (" + repl.library + ")",
-      "",
-      kind,
-      "Preserve the original element's attributes (class, width, height, aria-label, and color/currentColor) so sizing and theming stay identical. Make a backup before editing and keep the change minimal/additive.",
-      "",
-      "--- OLD SVG (find this) ---",
-      src.svg,
-      "",
-      "--- NEW SVG (" + repl.icon + ") ---",
-      newSvg,
-    ].join("\n")
-  }
+  $: prompt =
+    chosen
+      ? buildSinglePrompt({ id: icon.id, source: icon, replacement: chosen, replacementSvg: chosenSvg })
+      : ""
 
   async function copy(text: string, label: string) {
     try {
@@ -131,14 +114,20 @@
     </div>
   </div>
 
-  <div class="export">
-    <div class="export-head">
-      <span class="export-title">AI edit prompt</span>
-      <button class="primary" on:click={() => copy(prompt, "prompt")}>Copy prompt</button>
-    </div>
-    <p class="export-sub">Paste this into your AI terminal to swap <b>{icon.name}</b> for <b>{chosen.name}</b>.</p>
-    <textarea class="prompt" readonly rows="9" value={prompt}></textarea>
-  </div>
+  <button
+    class="add"
+    class:done={queuedIcon === chosen.icon}
+    on:click={() => chosen && dispatch("add", { replacement: chosen, svg: chosenSvg })}
+  >
+    {queuedIcon === chosen.icon ? "✓ In changes · update" : "+ Add to changes"}
+  </button>
+
+  <details class="export">
+    <summary>Single-change prompt</summary>
+    <p class="export-sub">Or queue several and export one combined prompt from <b>Changes</b>.</p>
+    <textarea class="prompt" readonly rows="8" value={prompt}></textarea>
+    <button class="copy-prompt" on:click={() => copy(prompt, "prompt")}>Copy this prompt</button>
+  </details>
 {/if}
 
 {#if copied}<div class="copied">Copied {copied}!</div>{/if}
@@ -222,18 +211,20 @@
   .copy-row button:hover:not(:disabled) { border-color: var(--accent); }
   .copy-row button:disabled { opacity: 0.4; cursor: default; }
 
+  .add {
+    width: 100%; margin-bottom: 12px;
+    background: var(--accent-2); color: #04130f; border: none;
+    border-radius: 9px; padding: 10px; font-weight: 700;
+  }
+  .add.done { background: #16241f; color: var(--accent-2); border: 1px solid var(--accent-2); }
+
   .export {
-    margin: 12px 0; padding: 12px;
+    margin: 0 0 12px; padding: 10px 12px;
     background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px;
   }
-  .export-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .export-title { font-size: 13px; font-weight: 600; }
-  .export-sub { margin: 6px 0 8px; font-size: 12px; color: var(--muted); }
-  .export-sub b { color: var(--text); font-weight: 600; }
-  .primary {
-    background: var(--accent); color: white; border: none;
-    border-radius: 7px; padding: 6px 12px; font-size: 12px; font-weight: 600;
-  }
+  .export summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+  .export-sub { margin: 8px 0; font-size: 12px; color: var(--muted); }
+  .export-sub b { color: var(--text); }
   .prompt {
     width: 100%; resize: vertical;
     background: var(--bg); border: 1px solid var(--border); color: var(--text);
@@ -241,11 +232,14 @@
     font-size: 11px; line-height: 1.5; outline: none;
   }
   .prompt:focus { border-color: var(--accent); }
+  .copy-prompt {
+    margin-top: 8px; background: var(--accent); color: white; border: none;
+    border-radius: 7px; padding: 7px 12px; font-size: 12px; font-weight: 600;
+  }
 
   .copied {
     position: sticky; bottom: 6px;
-    text-align: center; font-size: 12px; color: var(--accent-2);
-    margin: 8px 0;
+    text-align: center; font-size: 12px; color: var(--accent-2); margin: 8px 0;
   }
 
   .results { margin-top: 12px; display: flex; flex-direction: column; gap: 18px; }

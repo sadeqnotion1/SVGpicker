@@ -1,9 +1,16 @@
 <script lang="ts">
   import { parseRepoInput } from "./lib/github"
   import { scanRepo, type ScanProgress } from "./lib/scan"
+  import { scanFiles } from "./lib/local"
   import type { ExtractedIcon } from "./lib/extract"
+  import type { IconChange } from "./lib/prompt"
+  import type { IconMatch } from "./lib/iconify"
   import IconCard from "./components/IconCard.svelte"
   import SimilarPanel from "./components/SimilarPanel.svelte"
+  import ChangesPanel from "./components/ChangesPanel.svelte"
+
+  type Mode = "github" | "folder" | "files"
+  let mode: Mode = "github"
 
   let repoInput = ""
   let token = ""
@@ -13,27 +20,36 @@
   let icons: ExtractedIcon[] = []
   let filter = ""
   let selected: ExtractedIcon | null = null
+  let sourceLabel = ""
+
+  let changes: IconChange[] = []
+  let showChanges = false
 
   const samples = ["tabler/tabler-icons", "lucide-icons/lucide", "twbs/icons"]
 
   $: filtered = filter
     ? icons.filter((i) => (i.name + " " + i.path).toLowerCase().includes(filter.toLowerCase()))
     : icons
-
   $: pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0
+  $: queuedIcon = selected ? changes.find((c) => c.id === selected.id)?.replacement.icon ?? null : null
 
-  async function scan() {
+  function reset() {
     error = ""
     selected = null
     icons = []
     filter = ""
+    progress = { total: 0, done: 0, found: 0 }
+  }
+
+  async function scanGithub() {
+    reset()
     const ref = parseRepoInput(repoInput)
     if (!ref) {
       error = "Enter a GitHub repo like owner/repo or a github.com URL."
       return
     }
     scanning = true
-    progress = { total: 0, done: 0, found: 0 }
+    sourceLabel = ref.owner + "/" + ref.repo
     try {
       icons = await scanRepo(ref, {
         token: token.trim() || undefined,
@@ -46,43 +62,120 @@
       scanning = false
     }
   }
+
+  async function handleLocal(event: Event) {
+    const input = event.target as HTMLInputElement
+    const list = input.files
+    if (!list || !list.length) return
+    reset()
+    scanning = true
+    const files = Array.from(list)
+    const first = files[0] as File & { webkitRelativePath?: string }
+    sourceLabel =
+      mode === "folder"
+        ? (first.webkitRelativePath?.split("/")[0] || "local folder") + "  (" + files.length + " files)"
+        : files.length + " file" + (files.length > 1 ? "s" : "")
+    try {
+      icons = await scanFiles(files, { onProgress: (p) => (progress = { ...p }) })
+      if (!icons.length) error = "No SVG icons found in that selection."
+      else if (mode === "files" && icons.length === 1) selected = icons[0]
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e)
+    } finally {
+      scanning = false
+      input.value = ""
+    }
+  }
+
+  // Make a file input pick a whole directory (browser-only attribute).
+  function asDirectory(node: HTMLInputElement) {
+    ;(node as HTMLInputElement & { webkitdirectory: boolean }).webkitdirectory = true
+  }
+
+  function addChange(event: CustomEvent<{ replacement: IconMatch; svg: string }>) {
+    if (!selected) return
+    const { replacement, svg } = event.detail
+    const item: IconChange = {
+      id: selected.id,
+      source: selected,
+      replacement,
+      replacementSvg: svg,
+    }
+    const idx = changes.findIndex((c) => c.id === item.id)
+    if (idx >= 0) {
+      changes[idx] = item
+      changes = [...changes]
+    } else {
+      changes = [...changes, item]
+    }
+  }
+
+  function removeChange(event: CustomEvent<{ id: string }>) {
+    changes = changes.filter((c) => c.id !== event.detail.id)
+    if (!changes.length) showChanges = false
+  }
+  function clearChanges() {
+    changes = []
+    showChanges = false
+  }
 </script>
 
 <main>
   <header>
-    <div class="brand">
-      <span class="logo">◆</span> SVGpicker
+    <div class="topbar">
+      <div class="brand"><span class="logo">◆</span> SVGpicker</div>
+      <button class="changes-btn" class:has={changes.length} on:click={() => (showChanges = true)}>
+        Changes <span class="badge">{changes.length}</span>
+      </button>
     </div>
     <p class="tag">
-      Pull icons out of any GitHub repo, then find similar icons from
+      Pull icons out of a GitHub repo or a local folder, then find similar icons from
       <b>Tabler</b>, <b>Lucide</b>, <b>Font Awesome</b> &amp; <b>Material Symbols</b>.
     </p>
   </header>
 
-  <section class="controls">
-    <input
-      class="repo"
-      bind:value={repoInput}
-      placeholder="owner/repo  or  https://github.com/owner/repo"
-      on:keydown={(e) => e.key === "Enter" && scan()}
-    />
-    <input
-      class="token"
-      type="password"
-      bind:value={token}
-      placeholder="GitHub token (optional)"
-    />
-    <button class="scan" on:click={scan} disabled={scanning}>
-      {scanning ? "Scanning…" : "Scan repo"}
-    </button>
-  </section>
-
-  <div class="samples">
-    Try:
-    {#each samples as s}
-      <button class="chip" on:click={() => { repoInput = s; scan() }}>{s}</button>
-    {/each}
+  <div class="tabs">
+    <button class:active={mode === "github"} on:click={() => (mode = "github")}>GitHub repo</button>
+    <button class:active={mode === "folder"} on:click={() => (mode = "folder")}>Local folder</button>
+    <button class:active={mode === "files"} on:click={() => (mode = "files")}>Local file(s)</button>
   </div>
+
+  {#if mode === "github"}
+    <section class="controls">
+      <input
+        class="repo"
+        bind:value={repoInput}
+        placeholder="owner/repo  or  https://github.com/owner/repo"
+        on:keydown={(e) => e.key === "Enter" && scanGithub()}
+      />
+      <input class="token" type="password" bind:value={token} placeholder="GitHub token (optional)" />
+      <button class="scan" on:click={scanGithub} disabled={scanning}>
+        {scanning ? "Scanning…" : "Scan repo"}
+      </button>
+    </section>
+    <div class="samples">
+      Try:
+      {#each samples as s}
+        <button class="chip" on:click={() => { repoInput = s; scanGithub() }}>{s}</button>
+      {/each}
+    </div>
+  {:else if mode === "folder"}
+    <section class="controls">
+      <label class="filebtn">
+        {scanning ? "Scanning…" : "Choose a folder…"}
+        <input type="file" multiple use:asDirectory on:change={handleLocal} hidden />
+      </label>
+      <span class="file-hint">Scans every .svg file and inline &lt;svg&gt; in the folder — stays on your machine.</span>
+    </section>
+  {:else}
+    <section class="controls">
+      <label class="filebtn">
+        {scanning ? "Scanning…" : "Choose icon file(s)…"}
+        <input type="file" accept=".svg,.html,.svelte,.vue,.jsx,.tsx,.js,.ts,image/svg+xml" multiple on:change={handleLocal} hidden />
+      </label>
+      <span class="file-hint">Pick one or more .svg files (or code files) from your PC.</span>
+    </section>
+  {/if}
 
   {#if scanning}
     <div class="progress">
@@ -99,6 +192,7 @@
   {#if icons.length}
     <div class="toolbar">
       <input class="filter" bind:value={filter} placeholder={"Filter " + icons.length + " icons…"} />
+      {#if sourceLabel}<span class="src-tag">{sourceLabel}</span>{/if}
       <span class="hint">Click an icon to find similar ones →</span>
     </div>
   {/if}
@@ -112,66 +206,87 @@
 
     {#if selected}
       <aside class="panel">
-        <SimilarPanel icon={selected} on:close={() => (selected = null)} />
+        <SimilarPanel
+          icon={selected}
+          {queuedIcon}
+          on:close={() => (selected = null)}
+          on:add={addChange}
+        />
       </aside>
     {/if}
   </div>
 
   {#if !scanning && !icons.length && !error}
     <div class="empty">
-      <p>Point SVGpicker at a repository to pull every <code>&lt;svg&gt;</code> it can find —
-      both standalone <code>.svg</code> files and inline markup in components.</p>
-      <p>Then click any extracted icon to browse matching icons across the four libraries
-      and copy the one you want.</p>
+      <p>Point SVGpicker at a <b>GitHub repo</b> or a <b>local folder</b> to pull every
+      <code>&lt;svg&gt;</code> it can find — both standalone <code>.svg</code> files and inline markup.</p>
+      <p>Click an extracted icon to browse matching icons across the four libraries, then
+      <b>Add to changes</b> and export one prompt for all your swaps.</p>
     </div>
   {/if}
 
   <footer>Icons matched via the Iconify API. SVGpicker runs entirely in your browser.</footer>
 </main>
 
+{#if showChanges}
+  <ChangesPanel
+    {changes}
+    on:close={() => (showChanges = false)}
+    on:remove={removeChange}
+    on:clear={clearChanges}
+  />
+{/if}
+
 <style>
-  main {
-    max-width: 1180px;
-    margin: 0 auto;
-    padding: 32px 24px 64px;
-  }
-  header { margin-bottom: 22px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 32px 24px 64px; }
+  header { margin-bottom: 18px; }
+  .topbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .brand {
-    font-size: 26px;
-    font-weight: 800;
-    letter-spacing: -0.01em;
-    display: flex;
-    align-items: center;
-    gap: 10px;
+    font-size: 26px; font-weight: 800; letter-spacing: -0.01em;
+    display: flex; align-items: center; gap: 10px;
   }
-  .logo {
-    color: var(--accent);
-    filter: drop-shadow(0 0 10px rgba(124, 92, 255, 0.6));
+  .logo { color: var(--accent); filter: drop-shadow(0 0 10px rgba(124, 92, 255, 0.6)); }
+  .changes-btn {
+    background: var(--bg-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 14px; font-weight: 600;
   }
-  .tag { color: var(--muted); margin: 6px 0 0; max-width: 640px; line-height: 1.5; }
+  .changes-btn.has { border-color: var(--accent-2); }
+  .changes-btn:hover { border-color: var(--accent); }
+  .badge {
+    background: var(--accent); color: white; border-radius: 20px; padding: 0 8px;
+    font-size: 12px; margin-left: 4px;
+  }
+  .tag { color: var(--muted); margin: 6px 0 0; max-width: 660px; line-height: 1.5; }
   .tag b { color: var(--text); font-weight: 600; }
 
-  .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 6px; margin: 18px 0 14px; flex-wrap: wrap; }
+  .tabs button {
+    background: var(--bg-2); color: var(--muted); border: 1px solid var(--border);
+    border-radius: 9px; padding: 8px 14px; font-weight: 600; font-size: 13px;
+  }
+  .tabs button.active { color: var(--text); border-color: var(--accent); background: #1d2233; }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
   .repo, .token {
-    background: var(--bg-2);
-    border: 1px solid var(--border);
-    color: var(--text);
-    border-radius: 10px;
-    padding: 11px 14px;
-    outline: none;
+    background: var(--bg-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 11px 14px; outline: none;
   }
   .repo { flex: 1; min-width: 260px; }
   .token { width: 200px; }
   .repo:focus, .token:focus { border-color: var(--accent); }
   .scan {
-    background: var(--accent);
-    color: white;
-    border: none;
-    border-radius: 10px;
-    padding: 0 22px;
-    font-weight: 700;
+    background: var(--accent); color: white; border: none;
+    border-radius: 10px; padding: 0 22px; font-weight: 700;
   }
   .scan:disabled { opacity: 0.6; cursor: default; }
+
+  .filebtn {
+    display: inline-flex; align-items: center; cursor: pointer;
+    background: var(--accent); color: white; border-radius: 10px;
+    padding: 11px 20px; font-weight: 700;
+  }
+  .filebtn:hover { filter: brightness(1.08); }
+  .file-hint { color: var(--muted); font-size: 13px; }
 
   .samples { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 12px; color: var(--muted); font-size: 13px; }
   .chip {
@@ -199,27 +314,24 @@
     border-radius: 10px; padding: 9px 14px; outline: none; min-width: 220px;
   }
   .filter:focus { border-color: var(--accent); }
+  .src-tag {
+    background: var(--bg-2); border: 1px solid var(--border); color: var(--muted);
+    border-radius: 20px; padding: 4px 12px; font-size: 12px;
+  }
   .hint { color: var(--muted); font-size: 13px; }
 
   .layout { display: grid; grid-template-columns: 1fr; gap: 20px; align-items: start; }
   .layout.split { grid-template-columns: minmax(0, 1fr) 380px; }
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-    gap: 12px;
-  }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 12px; }
   .panel {
-    position: sticky;
-    top: 16px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 16px;
-    max-height: calc(100vh - 32px);
-    overflow: auto;
+    position: sticky; top: 16px;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px;
+    max-height: calc(100vh - 32px); overflow: auto;
   }
 
-  .empty { margin-top: 30px; color: var(--muted); line-height: 1.6; max-width: 620px; }
+  .empty { margin-top: 30px; color: var(--muted); line-height: 1.6; max-width: 640px; }
+  .empty b { color: var(--text); }
   .empty code { background: var(--bg-2); padding: 1px 6px; border-radius: 6px; color: var(--text); }
 
   footer { margin-top: 48px; color: var(--muted); font-size: 12px; text-align: center; }
