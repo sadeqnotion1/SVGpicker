@@ -2,6 +2,7 @@
   import { createEventDispatcher } from "svelte"
   import { searchSimilar, fetchIconSvg, type IconMatch } from "../lib/iconify"
   import type { ExtractedIcon } from "../lib/extract"
+  import { fitSvgToOriginal, describeFit } from "../lib/svgsize"
   import { buildSinglePrompt } from "../lib/prompt"
 
   export let icon: ExtractedIcon
@@ -19,6 +20,12 @@
   let chosenSvg = ""
   let copied = ""
   let lastId = ""
+  let fit = true
+
+  // The SVG we actually hand off: matched to the original's footprint when
+  // "Match original size" is on, otherwise the raw icon-set SVG.
+  $: outSvg = chosenSvg ? (fit ? fitSvgToOriginal(chosenSvg, icon.svg) : chosenSvg) : ""
+  $: fitNote = chosenSvg ? describeFit(chosenSvg, icon.svg) : ""
 
   $: if (icon && icon.id !== lastId) {
     lastId = icon.id
@@ -65,7 +72,13 @@
 
   $: prompt =
     chosen
-      ? buildSinglePrompt({ id: icon.id, source: icon, replacement: chosen, replacementSvg: chosenSvg })
+      ? buildSinglePrompt({
+          kind: "replace",
+          id: icon.id,
+          source: icon,
+          replacement: chosen,
+          replacementSvg: outSvg,
+        })
       : ""
 
   async function copy(text: string, label: string) {
@@ -102,13 +115,18 @@
 {#if chosen}
   <div class="chosen">
     <div class="chosen-preview">
-      {#if chosenSvg}{@html chosenSvg}{:else}<img src={chosen.previewUrl} alt={chosen.name} />{/if}
+      {#if outSvg}{@html outSvg}{:else}<img src={chosen.previewUrl} alt={chosen.name} />{/if}
     </div>
     <div class="chosen-body">
       <div class="chosen-name">{chosen.library} · {chosen.name}</div>
+      <label class="fit-toggle" title="Keep the new icon's viewBox but reuse the original's width/height/class so it slots in at the same size.">
+        <input type="checkbox" bind:checked={fit} />
+        Match original size
+      </label>
+      {#if fit && fitNote}<div class="fit-note">{fitNote}</div>{/if}
       <div class="copy-row">
         <button on:click={() => chosen && copy(chosen.icon, "name")}>Copy name</button>
-        <button on:click={() => chosenSvg && copy(chosenSvg, "svg")} disabled={!chosenSvg}>Copy SVG</button>
+        <button on:click={() => outSvg && copy(outSvg, "svg")} disabled={!outSvg}>Copy SVG</button>
         <button on:click={() => chosen && copy(chosen.svgUrl, "url")}>Copy URL</button>
       </div>
     </div>
@@ -117,7 +135,7 @@
   <button
     class="add"
     class:done={queuedIcon === chosen.icon}
-    on:click={() => chosen && dispatch("add", { replacement: chosen, svg: chosenSvg })}
+    on:click={() => chosen && dispatch("add", { replacement: chosen, svg: outSvg })}
   >
     {queuedIcon === chosen.icon ? "✓ In changes · update" : "+ Add to changes"}
   </button>
@@ -202,7 +220,13 @@
     display: flex; align-items: center; justify-content: center;
   }
   .chosen-preview :global(svg), .chosen-preview img { width: 36px; height: 36px; }
-  .chosen-name { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+  .chosen-name { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+  .fit-toggle {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: var(--text); margin-bottom: 4px; cursor: pointer;
+  }
+  .fit-toggle input { accent-color: var(--accent); }
+  .fit-note { font-size: 11px; color: var(--muted); margin-bottom: 8px; }
   .copy-row { display: flex; gap: 6px; flex-wrap: wrap; }
   .copy-row button {
     background: #222840; color: var(--text); border: 1px solid var(--border);

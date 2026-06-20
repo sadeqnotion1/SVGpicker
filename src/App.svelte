@@ -2,15 +2,22 @@
   import { parseRepoInput } from "./lib/github"
   import { scanRepo, type ScanProgress } from "./lib/scan"
   import { scanFiles } from "./lib/local"
-  import type { ExtractedIcon } from "./lib/extract"
+  import { cleanSvg, normalizeName, type ExtractedIcon } from "./lib/extract"
   import type { IconChange } from "./lib/prompt"
   import type { IconMatch } from "./lib/iconify"
   import IconCard from "./components/IconCard.svelte"
   import SimilarPanel from "./components/SimilarPanel.svelte"
   import ChangesPanel from "./components/ChangesPanel.svelte"
 
-  type Mode = "github" | "folder" | "files"
+  type Mode = "github" | "folder" | "add"
   let mode: Mode = "github"
+
+  interface ImportItem {
+    id: string
+    fileName: string
+    svg: string
+    name: string
+  }
 
   let repoInput = ""
   let token = ""
@@ -24,6 +31,8 @@
 
   let changes: IconChange[] = []
   let showChanges = false
+  let importItems: ImportItem[] = []
+  let destFolder = "src/assets/icons"
 
   const samples = ["tabler/tabler-icons", "lucide-icons/lucide", "twbs/icons"]
 
@@ -31,7 +40,12 @@
     ? icons.filter((i) => (i.name + " " + i.path).toLowerCase().includes(filter.toLowerCase()))
     : icons
   $: pct = progress.total ? Math.round((progress.done / progress.total) * 100) : 0
-  $: queuedIcon = selected ? changes.find((c) => c.id === selected.id)?.replacement.icon ?? null : null
+  $: queuedIcon = (() => {
+    const selId = selected?.id
+    if (!selId) return null
+    const c = changes.find((x) => x.id === selId)
+    return c && c.kind === "replace" ? c.replacement.icon : null
+  })()
 
   function reset() {
     error = ""
@@ -63,7 +77,7 @@
     }
   }
 
-  async function handleLocal(event: Event) {
+  async function handleFolder(event: Event) {
     const input = event.target as HTMLInputElement
     const list = input.files
     if (!list || !list.length) return
@@ -71,20 +85,87 @@
     scanning = true
     const files = Array.from(list)
     const first = files[0] as File & { webkitRelativePath?: string }
-    sourceLabel =
-      mode === "folder"
-        ? (first.webkitRelativePath?.split("/")[0] || "local folder") + "  (" + files.length + " files)"
-        : files.length + " file" + (files.length > 1 ? "s" : "")
+    sourceLabel = (first.webkitRelativePath?.split("/")[0] || "local folder") + "  (" + files.length + " files)"
     try {
       icons = await scanFiles(files, { onProgress: (p) => (progress = { ...p }) })
-      if (!icons.length) error = "No SVG icons found in that selection."
-      else if (mode === "files" && icons.length === 1) selected = icons[0]
+      if (!icons.length) error = "No SVG icons found in that folder."
     } catch (e) {
       error = e instanceof Error ? e.message : String(e)
     } finally {
       scanning = false
       input.value = ""
     }
+  }
+
+  // "Add custom icons": import local .svg files you made, rename them, then add them
+  // to the picker grid as source icons you can find similar matches for.
+  async function handleImport(event: Event) {
+    const input = event.target as HTMLInputElement
+    const list = input.files
+    if (!list || !list.length) return
+    error = ""
+    const svgFiles = Array.from(list).filter((f) => /\.svg$/i.test(f.name))
+    if (!svgFiles.length) {
+      error = "Pick one or more .svg files."
+      input.value = ""
+      return
+    }
+    const added: ImportItem[] = []
+    for (const file of svgFiles) {
+      try {
+        const svg = cleanSvg(await file.text())
+        if (!/<svg[\s\S]*<\/svg>/i.test(svg)) continue
+        added.push({ id: crypto.randomUUID(), fileName: file.name, svg, name: defaultName(file.name) })
+      } catch {
+        // ignore unreadable file
+      }
+    }
+    if (!added.length && !importItems.length) error = "Those files don't look like valid SVGs."
+    importItems = [...importItems, ...added]
+    input.value = ""
+  }
+
+  function defaultName(fileName: string): string {
+    return (
+      fileName
+        .replace(/\.svg$/i, "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "") || "icon"
+    )
+  }
+
+  function removeImport(id: string) {
+    importItems = importItems.filter((i) => i.id !== id)
+  }
+
+  // Add the imported icons into the main grid as source icons (deduped by id),
+  // so they become pickable like anything scanned from a repo/folder.
+  function addToPicker() {
+    const valid = importItems.filter((i) => i.name.trim())
+    if (!valid.length) return
+    const folder = destFolder.trim().replace(/^\/+|\/+$/g, "")
+    const map = new Map(icons.map((i) => [i.id, i]))
+    for (const i of valid) {
+      const safe = i.name.trim().replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "icon"
+      const id = "custom:" + i.id
+      const { query } = normalizeName(safe)
+      const icon: ExtractedIcon = {
+        id,
+        name: safe,
+        rawName: i.fileName,
+        query: query || safe,
+        path: (folder ? folder + "/" : "") + safe + ".svg",
+        svg: i.svg,
+        source: "file",
+      }
+      map.set(id, icon)
+    }
+    icons = [...map.values()]
+    importItems = []
+    error = ""
+    if (!sourceLabel) sourceLabel = "Custom icons"
   }
 
   // Make a file input pick a whole directory (browser-only attribute).
@@ -96,6 +177,7 @@
     if (!selected) return
     const { replacement, svg } = event.detail
     const item: IconChange = {
+      kind: "replace",
       id: selected.id,
       source: selected,
       replacement,
@@ -137,7 +219,7 @@
   <div class="tabs">
     <button class:active={mode === "github"} on:click={() => (mode = "github")}>GitHub repo</button>
     <button class:active={mode === "folder"} on:click={() => (mode = "folder")}>Local folder</button>
-    <button class:active={mode === "files"} on:click={() => (mode = "files")}>Local file(s)</button>
+    <button class:active={mode === "add"} on:click={() => (mode = "add")}>Add custom icons</button>
   </div>
 
   {#if mode === "github"}
@@ -163,18 +245,40 @@
     <section class="controls">
       <label class="filebtn">
         {scanning ? "Scanning…" : "Choose a folder…"}
-        <input type="file" multiple use:asDirectory on:change={handleLocal} hidden />
+        <input type="file" multiple use:asDirectory on:change={handleFolder} hidden />
       </label>
       <span class="file-hint">Scans every .svg file and inline &lt;svg&gt; in the folder — stays on your machine.</span>
     </section>
   {:else}
-    <section class="controls">
+    <section class="controls add-controls">
       <label class="filebtn">
-        {scanning ? "Scanning…" : "Choose icon file(s)…"}
-        <input type="file" accept=".svg,.html,.svelte,.vue,.jsx,.tsx,.js,.ts,image/svg+xml" multiple on:change={handleLocal} hidden />
+        Choose .svg file(s)…
+        <input type="file" accept=".svg,image/svg+xml" multiple on:change={handleImport} hidden />
       </label>
-      <span class="file-hint">Pick one or more .svg files (or code files) from your PC.</span>
+      <label class="dest">
+        <span>Folder label (optional)</span>
+        <input bind:value={destFolder} placeholder="src/assets/icons" />
+      </label>
     </section>
+    <p class="file-hint big">Import icons you made yourself, rename them, then add them to the picker — they join the grid as source icons you can find similar matches for. Nothing leaves your browser.</p>
+
+    {#if importItems.length}
+      <div class="import-list">
+        {#each importItems as item (item.id)}
+          <div class="import-row">
+            <div class="mini">{@html item.svg}</div>
+            <input class="name-in" bind:value={item.name} spellcheck="false" />
+            <span class="ext">.svg</span>
+            <span class="orig" title={item.fileName}>{item.fileName}</span>
+            <button class="rm" on:click={() => removeImport(item.id)} aria-label="Remove">×</button>
+          </div>
+        {/each}
+        <div class="import-actions">
+          <button class="primary" on:click={addToPicker}>Add {importItems.length} icon{importItems.length > 1 ? "s" : ""} to picker</button>
+          <button class="ghost" on:click={() => (importItems = [])}>Clear</button>
+        </div>
+      </div>
+    {/if}
   {/if}
 
   {#if scanning}
@@ -216,7 +320,7 @@
     {/if}
   </div>
 
-  {#if !scanning && !icons.length && !error}
+  {#if !scanning && !icons.length && !error && mode !== "add"}
     <div class="empty">
       <p>Point SVGpicker at a <b>GitHub repo</b> or a <b>local folder</b> to pull every
       <code>&lt;svg&gt;</code> it can find — both standalone <code>.svg</code> files and inline markup.</p>
@@ -335,6 +439,45 @@
   .empty code { background: var(--bg-2); padding: 1px 6px; border-radius: 6px; color: var(--text); }
 
   footer { margin-top: 48px; color: var(--muted); font-size: 12px; text-align: center; }
+
+  .add-controls { align-items: flex-end; }
+  .dest { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
+  .dest input {
+    background: var(--bg-2); border: 1px solid var(--border); color: var(--text);
+    border-radius: 10px; padding: 11px 14px; outline: none; min-width: 240px;
+  }
+  .dest input:focus { border-color: var(--accent); }
+  .file-hint.big { margin-top: 12px; display: block; }
+
+  .import-list { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+  .import-row {
+    display: flex; align-items: center; gap: 10px;
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px;
+  }
+  .import-row .mini {
+    width: 34px; height: 34px; flex: none; color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .import-row .mini :global(svg) { width: 26px; height: 26px; }
+  .name-in {
+    flex: 1; min-width: 120px;
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    border-radius: 8px; padding: 8px 10px; outline: none;
+  }
+  .name-in:focus { border-color: var(--accent); }
+  .ext { color: var(--muted); font-size: 13px; }
+  .orig { color: var(--muted); font-size: 11px; max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .import-row .rm { background: transparent; border: none; color: var(--muted); font-size: 18px; flex: none; }
+  .import-row .rm:hover { color: var(--danger); }
+  .import-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .import-actions .primary {
+    background: var(--accent-2); color: #04130f; border: none;
+    border-radius: 9px; padding: 10px 16px; font-weight: 700;
+  }
+  .import-actions .ghost {
+    background: transparent; color: var(--muted); border: 1px solid var(--border);
+    border-radius: 9px; padding: 10px 16px;
+  }
 
   @media (max-width: 820px) {
     .layout.split { grid-template-columns: 1fr; }

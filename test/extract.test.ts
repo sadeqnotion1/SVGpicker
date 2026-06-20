@@ -10,6 +10,7 @@ import {
 } from "../src/lib/extract"
 import { parseRepoInput } from "../src/lib/github"
 import { buildSinglePrompt, buildBatchPrompt, type IconChange } from "../src/lib/prompt"
+import { fitSvgToOriginal, readSvgBox } from "../src/lib/svgsize"
 import type { IconMatch } from "../src/lib/iconify"
 
 let passed = 0
@@ -69,7 +70,7 @@ function fakeChange(path: string, name: string, icon: string): IconChange {
     icon, prefix: icon.split(":")[0], name: icon.split(":")[1], library: "Tabler",
     svgUrl: "https://api.iconify.design/" + icon.replace(":", "/") + ".svg", previewUrl: "x",
   }
-  return { id: path, source, replacement, replacementSvg: "<svg><path d='M2 2'/></svg>" }
+  return { kind: "replace", id: path, source, replacement, replacementSvg: "<svg><path d='M2 2'/></svg>" }
 }
 
 test("buildSinglePrompt includes path + old/new svg", () => {
@@ -85,12 +86,59 @@ test("buildBatchPrompt enumerates every change", () => {
     fakeChange("a/home.svg", "home", "tabler:home"),
     fakeChange("b/user.svg", "user", "lucide:user"),
   ])
-  assert.ok(p.includes("ALL 2 changes"))
-  assert.ok(p.includes("=== Change 1 ==="))
-  assert.ok(p.includes("=== Change 2 ==="))
+  assert.ok(p.includes("ALL 2 icon changes"))
+  assert.ok(p.includes("=== Change 1 (replace icon) ==="))
+  assert.ok(p.includes("=== Change 2 (replace icon) ==="))
   assert.ok(p.includes("a/home.svg"))
   assert.ok(p.includes("b/user.svg"))
   assert.equal(buildBatchPrompt([]), "")
+})
+
+test("buildBatchPrompt handles add (new icon) changes", () => {
+  const add: IconChange = {
+    kind: "add",
+    id: "add:1",
+    name: "my-logo",
+    fileName: "My Logo.svg",
+    svg: "<svg><path d='M9 9'/></svg>",
+    destFolder: "src/assets/icons",
+  }
+  const p = buildBatchPrompt([add, fakeChange("a/home.svg", "home", "tabler:home")])
+  assert.ok(p.includes("1 replacement and 1 addition"))
+  assert.ok(p.includes("Create a new file: src/assets/icons/my-logo.svg"))
+  assert.ok(p.includes("FILE CONTENTS:"))
+})
+
+test("fitSvgToOriginal adopts original outer size, keeps new viewBox", () => {
+  const oldSvg = `<svg xmlns="http://www.w3.org/2000/svg" class="icon icon-tabler" width="24" height="24" viewBox="0 0 24 24" stroke-width="2"><path d="M4 4"/></svg>`
+  const newSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512"><path d="M1 1"/></svg>`
+  const out = fitSvgToOriginal(newSvg, oldSvg)
+  // keeps the new art's coordinate system
+  assert.ok(out.includes('viewBox="0 0 512 512"'))
+  // adopts the original's rendered footprint + class
+  assert.ok(out.includes('width="24"'))
+  assert.ok(out.includes('height="24"'))
+  assert.ok(out.includes('class="icon icon-tabler"'))
+  // inner art is preserved untouched
+  assert.ok(out.includes('<path d="M1 1"/>'))
+})
+
+test("fitSvgToOriginal falls back to 1em when original is CSS-sized", () => {
+  const oldSvg = `<svg xmlns="http://www.w3.org/2000/svg" class="i" viewBox="0 0 24 24"><path/></svg>`
+  const newSvg = `<svg viewBox="0 0 16 16"><path d="M2 2"/></svg>`
+  const out = fitSvgToOriginal(newSvg, oldSvg)
+  assert.ok(out.includes('width="1em"'))
+  assert.ok(out.includes('height="1em"'))
+  assert.ok(out.includes('viewBox="0 0 16 16"'))
+  assert.ok(out.includes('class="i"'))
+})
+
+test("readSvgBox reads size attributes", () => {
+  const b = readSvgBox(`<svg width="32" height="32" viewBox="0 0 32 32"><path/></svg>`)
+  assert.equal(b.width, "32")
+  assert.equal(b.height, "32")
+  assert.equal(b.viewBox, "0 0 32 32")
+  assert.equal(b.hasViewBox, true)
 })
 
 console.log(`\nAll ${passed} test groups passed.`)

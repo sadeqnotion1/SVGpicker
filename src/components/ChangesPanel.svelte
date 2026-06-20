@@ -34,13 +34,22 @@
     <div class="list">
       {#each changes as c (c.id)}
         <div class="row">
-          <div class="mini">{@html c.source.svg}</div>
-          <div class="arrow">→</div>
-          <div class="mini light"><img src={c.replacement.previewUrl} alt={c.replacement.name} /></div>
-          <div class="meta">
-            <div class="names">{c.source.name} <span>→ {c.replacement.icon}</span></div>
-            <div class="path" title={c.source.path.split('#')[0]}>{c.source.path.split('#')[0]}</div>
-          </div>
+          {#if c.kind === "add"}
+            <div class="mini">{@html c.svg}</div>
+            <div class="tag-new">NEW</div>
+            <div class="meta">
+              <div class="names">{c.name}.svg</div>
+              <div class="path" title={c.destFolder}>{c.destFolder || "(repo root)"}</div>
+            </div>
+          {:else}
+            <div class="mini">{@html c.source.svg}</div>
+            <div class="arrow">→</div>
+            <div class="mini light"><img src={c.replacement.previewUrl} alt={c.replacement.name} /></div>
+            <div class="meta">
+              <div class="names">{c.source.name} <span>→ {c.replacement.icon}</span></div>
+              <div class="path" title={c.source.path.split('#')[0]}>{c.source.path.split('#')[0]}</div>
+            </div>
+          {/if}
           <button class="rm" on:click={() => dispatch("remove", { id: c.id })} aria-label="Remove">×</button>
         </div>
       {/each}
@@ -87,6 +96,10 @@
   }
   .mini :global(svg), .mini img { width: 24px; height: 24px; }
   .arrow { color: var(--muted); flex: none; }
+  .tag-new {
+    flex: none; font-size: 10px; font-weight: 700; letter-spacing: 0.04em;
+    color: var(--accent-2); border: 1px solid var(--accent-2); border-radius: 6px; padding: 1px 5px;
+  }
   .meta { min-width: 0; flex: 1; }
   .names { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .names span { color: var(--accent-2); font-weight: 500; }
