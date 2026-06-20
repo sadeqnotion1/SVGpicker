@@ -4,7 +4,7 @@
   import { scanFiles } from "./lib/local"
   import { cleanSvg, normalizeName, type ExtractedIcon } from "./lib/extract"
   import type { IconChange } from "./lib/prompt"
-  import type { IconMatch } from "./lib/iconify"
+  import { customMatch, type IconMatch } from "./lib/iconify"
   import IconCard from "./components/IconCard.svelte"
   import SimilarPanel from "./components/SimilarPanel.svelte"
   import ChangesPanel from "./components/ChangesPanel.svelte"
@@ -32,7 +32,8 @@
   let changes: IconChange[] = []
   let showChanges = false
   let importItems: ImportItem[] = []
-  let destFolder = "src/assets/icons"
+  // Your own imported icons, available as replacement candidates in the similar-icons panel.
+  let customIcons: IconMatch[] = []
 
   const samples = ["tabler/tabler-icons", "lucide-icons/lucide", "twbs/icons"]
 
@@ -140,32 +141,24 @@
     importItems = importItems.filter((i) => i.id !== id)
   }
 
-  // Add the imported icons into the main grid as source icons (deduped by id),
-  // so they become pickable like anything scanned from a repo/folder.
-  function addToPicker() {
+  // Turn the imported items into your own replacement candidates (deduped by name),
+  // shown under "My icons" in the similar-icons panel so you can swap them into any repo icon.
+  function addToLibrary() {
     const valid = importItems.filter((i) => i.name.trim())
     if (!valid.length) return
-    const folder = destFolder.trim().replace(/^\/+|\/+$/g, "")
-    const map = new Map(icons.map((i) => [i.id, i]))
+    const map = new Map(customIcons.map((c) => [c.icon, c]))
     for (const i of valid) {
       const safe = i.name.trim().replace(/[^a-zA-Z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "icon"
-      const id = "custom:" + i.id
-      const { query } = normalizeName(safe)
-      const icon: ExtractedIcon = {
-        id,
-        name: safe,
-        rawName: i.fileName,
-        query: query || safe,
-        path: (folder ? folder + "/" : "") + safe + ".svg",
-        svg: i.svg,
-        source: "file",
-      }
-      map.set(id, icon)
+      const cand = customMatch(safe, i.svg)
+      map.set(cand.icon, cand)
     }
-    icons = [...map.values()]
+    customIcons = [...map.values()]
     importItems = []
     error = ""
-    if (!sourceLabel) sourceLabel = "Custom icons"
+  }
+
+  function removeCustom(icon: string) {
+    customIcons = customIcons.filter((c) => c.icon !== icon)
   }
 
   // Make a file input pick a whole directory (browser-only attribute).
@@ -255,12 +248,8 @@
         Choose .svg file(s)…
         <input type="file" accept=".svg,image/svg+xml" multiple on:change={handleImport} hidden />
       </label>
-      <label class="dest">
-        <span>Folder label (optional)</span>
-        <input bind:value={destFolder} placeholder="src/assets/icons" />
-      </label>
     </section>
-    <p class="file-hint big">Import icons you made yourself, rename them, then add them to the picker — they join the grid as source icons you can find similar matches for. Nothing leaves your browser.</p>
+    <p class="file-hint big">Import icons you made yourself, rename them, then add them to <b>My icons</b> — they become replacement candidates you can pick from the similar-icons panel when fixing a repo icon. Nothing leaves your browser.</p>
 
     {#if importItems.length}
       <div class="import-list">
@@ -274,9 +263,25 @@
           </div>
         {/each}
         <div class="import-actions">
-          <button class="primary" on:click={addToPicker}>Add {importItems.length} icon{importItems.length > 1 ? "s" : ""} to picker</button>
+          <button class="primary" on:click={addToLibrary}>Add {importItems.length} icon{importItems.length > 1 ? "s" : ""} to My icons</button>
           <button class="ghost" on:click={() => (importItems = [])}>Clear</button>
         </div>
+      </div>
+    {/if}
+
+    {#if customIcons.length}
+      <div class="library">
+        <div class="library-head">My icons <span>{customIcons.length}</span></div>
+        <div class="library-grid">
+          {#each customIcons as c (c.icon)}
+            <div class="lib-item" title={c.name}>
+              <div class="mini">{@html c.svg}</div>
+              <span class="lib-name">{c.name}</span>
+              <button class="rm" on:click={() => removeCustom(c.icon)} aria-label="Remove">×</button>
+            </div>
+          {/each}
+        </div>
+        <p class="file-hint">Now open <b>GitHub repo</b> or <b>Local folder</b>, click a source icon, and pick one of these under <b>My icons</b> to swap it in.</p>
       </div>
     {/if}
   {/if}
@@ -312,6 +317,7 @@
       <aside class="panel">
         <SimilarPanel
           icon={selected}
+          {customIcons}
           {queuedIcon}
           on:close={() => (selected = null)}
           on:add={addChange}
@@ -441,13 +447,34 @@
   footer { margin-top: 48px; color: var(--muted); font-size: 12px; text-align: center; }
 
   .add-controls { align-items: flex-end; }
-  .dest { display: flex; flex-direction: column; gap: 5px; font-size: 12px; color: var(--muted); }
-  .dest input {
-    background: var(--bg-2); border: 1px solid var(--border); color: var(--text);
-    border-radius: 10px; padding: 11px 14px; outline: none; min-width: 240px;
-  }
-  .dest input:focus { border-color: var(--accent); }
   .file-hint.big { margin-top: 12px; display: block; }
+
+  .library { margin-top: 18px; }
+  .library-head {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--muted); margin-bottom: 10px;
+  }
+  .library-head span {
+    background: var(--bg-2); border-radius: 20px; padding: 1px 8px; margin-left: 4px; font-size: 11px;
+  }
+  .library-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .lib-item {
+    display: flex; align-items: center; gap: 8px;
+    background: var(--bg-2); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px;
+  }
+  .lib-item .mini {
+    width: 30px; height: 30px; flex: none; color: var(--text);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .lib-item .mini :global(svg) { width: 24px; height: 24px; }
+  .lib-name {
+    flex: 1; min-width: 0; font-size: 12px; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .lib-item .rm {
+    background: transparent; border: none; color: var(--muted); font-size: 16px; line-height: 1; padding: 0 4px; cursor: pointer;
+  }
+  .lib-item .rm:hover { color: #ffb3b3; }
 
   .import-list { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
   .import-row {

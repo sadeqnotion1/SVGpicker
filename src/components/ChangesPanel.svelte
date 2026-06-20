@@ -44,7 +44,7 @@
           {:else}
             <div class="mini">{@html c.source.svg}</div>
             <div class="arrow">→</div>
-            <div class="mini light"><img src={c.replacement.previewUrl} alt={c.replacement.name} /></div>
+            <div class="mini light">{#if c.replacement.custom}{@html c.replacement.svg}{:else}<img src={c.replacement.previewUrl} alt={c.replacement.name} />{/if}</div>
             <div class="meta">
               <div class="names">{c.source.name} <span>→ {c.replacement.icon}</span></div>
               <div class="path" title={c.source.path.split('#')[0]}>{c.source.path.split('#')[0]}</div>

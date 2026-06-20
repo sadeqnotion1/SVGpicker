@@ -9,6 +9,8 @@ export interface IconMatch {
   library: string
   svgUrl: string // plain (currentColor) — best for copying / embedding in your app
   previewUrl: string // light-colored — used only for display on the dark UI
+  svg?: string // inline SVG for custom (non-Iconify) icons you imported
+  custom?: boolean // true for your own imported icons
 }
 
 // Iconify prefix -> friendly library name. Order also defines display priority.
@@ -67,4 +69,19 @@ export async function fetchIconSvg(icon: string): Promise<string> {
   const r = await fetch(BASE + "/" + prefix + "/" + name + ".svg")
   if (!r.ok) throw new Error("Icon fetch failed (" + r.status + ").")
   return r.text()
+}
+
+// Build a replacement candidate from one of your own imported SVGs. It carries the
+// inline svg (no Iconify URL) and is grouped under "My icons" in the similar-icons panel.
+export function customMatch(name: string, svg: string): IconMatch {
+  return {
+    icon: "custom:" + name,
+    prefix: "custom",
+    name,
+    library: "My icons",
+    svgUrl: "",
+    previewUrl: "",
+    svg,
+    custom: true,
+  }
 }

@@ -6,6 +6,7 @@
   import { buildSinglePrompt } from "../lib/prompt"
 
   export let icon: ExtractedIcon
+  export let customIcons: IconMatch[] = []
   export let queuedIcon: string | null = null
   const dispatch = createEventDispatcher<{
     close: void
@@ -49,7 +50,11 @@
     }
   }
 
-  $: groups = group(matches)
+  // Your own icons always appear first as candidates, regardless of the search term.
+  $: groups = [
+    ...(customIcons.length ? [["My icons", customIcons] as [string, IconMatch[]]] : []),
+    ...group(matches),
+  ]
   function group(ms: IconMatch[]): Array<[string, IconMatch[]]> {
     const map = new Map<string, IconMatch[]>()
     for (const m of ms) {
@@ -63,6 +68,10 @@
   async function choose(m: IconMatch) {
     chosen = m
     chosenSvg = ""
+    if (m.custom && m.svg) {
+      chosenSvg = m.svg
+      return
+    }
     try {
       chosenSvg = await fetchIconSvg(m.icon)
     } catch {
@@ -127,7 +136,7 @@
       <div class="copy-row">
         <button on:click={() => chosen && copy(chosen.icon, "name")}>Copy name</button>
         <button on:click={() => outSvg && copy(outSvg, "svg")} disabled={!outSvg}>Copy SVG</button>
-        <button on:click={() => chosen && copy(chosen.svgUrl, "url")}>Copy URL</button>
+        <button on:click={() => chosen && copy(chosen.svgUrl, "url")} disabled={!chosen.svgUrl}>Copy URL</button>
       </div>
     </div>
   </div>
@@ -159,10 +168,10 @@
           <button
             class="micon"
             class:active={chosen?.icon === m.icon}
-            title={m.icon}
+            title={m.custom ? m.name : m.icon}
             on:click={() => choose(m)}
           >
-            <img src={m.previewUrl} alt={m.name} loading="lazy" />
+            {#if m.custom}{@html m.svg}{:else}<img src={m.previewUrl} alt={m.name} loading="lazy" />{/if}
           </button>
         {/each}
       </div>
@@ -283,5 +292,7 @@
   }
   .micon:hover { border-color: var(--accent); transform: translateY(-1px); }
   .micon.active { border-color: var(--accent-2); background: #16241f; }
+  .micon { color: var(--text); }
   .micon img { width: 24px; height: 24px; }
+  .micon :global(svg) { width: 24px; height: 24px; }
 </style>
