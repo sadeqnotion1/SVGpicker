@@ -7,7 +7,8 @@ export interface IconMatch {
   prefix: string
   name: string
   library: string
-  svgUrl: string
+  svgUrl: string // plain (currentColor) — best for copying / embedding in your app
+  previewUrl: string // light-colored — used only for display on the dark UI
 }
 
 // Iconify prefix -> friendly library name. Order also defines display priority.
@@ -24,10 +25,15 @@ export const PREFIXES = Object.keys(LIBRARIES)
 export const LIBRARY_NAMES = [...new Set(Object.values(LIBRARIES))]
 
 const BASE = "https://api.iconify.design"
+// Light color so currentColor-based icons stay visible on the dark UI.
+const PREVIEW_COLOR = "#e6e9f0"
 
-export function iconSvgUrl(icon: string, height = 40): string {
+export function iconSvgUrl(icon: string, opts: { height?: number; color?: string } = {}): string {
+  const { height = 40, color } = opts
   const [prefix, name] = icon.split(":")
-  return `${BASE}/${prefix}/${name}.svg?height=${height}`
+  let url = BASE + "/" + prefix + "/" + name + ".svg?height=" + height
+  if (color) url += "&color=" + encodeURIComponent(color)
+  return url
 }
 
 function toMatch(icon: string): IconMatch | null {
@@ -39,6 +45,7 @@ function toMatch(icon: string): IconMatch | null {
     name,
     library: LIBRARIES[prefix] ?? prefix,
     svgUrl: iconSvgUrl(icon),
+    previewUrl: iconSvgUrl(icon, { color: PREVIEW_COLOR }),
   }
 }
 
@@ -46,10 +53,10 @@ export async function searchSimilar(query: string, limit = 60): Promise<IconMatc
   const q = query.trim()
   if (!q) return []
   const url =
-    `${BASE}/search?query=${encodeURIComponent(q)}` +
-    `&limit=${limit}&prefixes=${PREFIXES.join(",")}`
+    BASE + "/search?query=" + encodeURIComponent(q) +
+    "&limit=" + limit + "&prefixes=" + PREFIXES.join(",")
   const r = await fetch(url)
-  if (!r.ok) throw new Error(`Icon search failed (${r.status}).`)
+  if (!r.ok) throw new Error("Icon search failed (" + r.status + ").")
   const data = await r.json()
   const icons: string[] = data.icons ?? []
   return icons.map(toMatch).filter((m): m is IconMatch => m !== null)
@@ -57,7 +64,7 @@ export async function searchSimilar(query: string, limit = 60): Promise<IconMatc
 
 export async function fetchIconSvg(icon: string): Promise<string> {
   const [prefix, name] = icon.split(":")
-  const r = await fetch(`${BASE}/${prefix}/${name}.svg`)
-  if (!r.ok) throw new Error(`Icon fetch failed (${r.status}).`)
+  const r = await fetch(BASE + "/" + prefix + "/" + name + ".svg")
+  if (!r.ok) throw new Error("Icon fetch failed (" + r.status + ").")
   return r.text()
 }
